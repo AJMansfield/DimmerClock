@@ -1,5 +1,6 @@
 #define INCLUDE_PRINTF
-
+#define DEBUG
+#define QUIT_ON_WARN
 #include <Arduino.h>
 #include <MemoryFree.h>
 
@@ -39,97 +40,67 @@ void setupDimmer(){
   TriacDimmer::begin();
 }
 
-// ================== RTC CLOCK FUNCTION SETUP ==================
-#include <Time.h>
-#include <TimeAlarms.h>
-#include <DS1307RTC.h>
-#include <ConvertTime.h>
-
+// ========================== RTC SETUP ==========================
+#include <MD_DS1307.h>
 void setupRTC(){
-  setSyncProvider(RTC.get);   // the function to get the time from the RTC
+  RTC.readTime();
+  //set_system_time(mk_gmtime(&RTC.time));
+}
+void serviceRTC(){
+  if (Serial.available()) {
+    processSyncMessage();
+  }
+  
+  static unsigned long last_sync = 0;
+  if(millis() - last_sync > 1000){ // tick every second
+    RTC.readTime();
+    //set_system_time(mk_gmtime(&RTC.time));
+    last_sync += 1000;
+  }
 }
 
-#define TIME_HEADER  "T" 
+#define TIME_HEADER  "T"   // Header tag for serial time sync message
 void processSyncMessage() {
-  unsigned long pctime;
-  const unsigned long DEFAULT_TIME = 1357041600; // Jan 1 2013
+  long pctime;
 
   if(Serial.find(TIME_HEADER)) {
-     pctime = Serial.parseInt();
-     if( pctime >= DEFAULT_TIME) { // check the integer is a valid time (greater than Jan 1 2013)
-       RTC.set(pctime);
-       setTime(pctime); // Sync Arduino clock to the time received on the serial port
-     }
+    const unsigned long offset = 130700005;
+    pctime = Serial.parseInt();
+    Serial.println(pctime);
+    pctime = pctime - offset;
+    Serial.println(pctime);
+    Serial.print("\nRTC before:");
+    for(size_t i = 0; i < sizeof(tm); i++){
+      Serial.printf("%2x:", *((uint8_t*)(&RTC.time) + i));
+    }
+    tm t = *gmtime(pctime);
+    Serial.print("\nnew value :");
+    for(size_t i = 0; i < sizeof(tm); i++){
+      Serial.printf("%2x:", *((uint8_t*)(&t) + i));
+    }
+    RTC.time = *gmtime(pctime);
+    Serial.print("\nRTC assign:");
+    for(size_t i = 0; i < sizeof(tm); i++){
+      Serial.printf("%2x:", *((uint8_t*)(&RTC.time) + i));
+    }
+    RTC.writeTime();
+    Serial.print("\nRTC write :");
+    for(size_t i = 0; i < sizeof(tm); i++){
+      Serial.printf("%2x:", *((uint8_t*)(&RTC.time) + i));
+    }
+    RTC.readTime();
+    Serial.print("\nRTC read  :");
+    for(size_t i = 0; i < sizeof(tm); i++){
+      Serial.printf("%2x:", *((uint8_t*)(&RTC.time) + i));
+    }
   }
 }
 
-#define FADE_TIME 3600 //seconds to fade in, 600 = 10 minutes
-unsigned int fade_a_counter = 0;
-unsigned int fade_b_counter = 0;
-bool fade_a_cancel = false;
-bool fade_b_cancel = false;
+// ========================== ALARM SETUP =========================
 
-void fade_a_in(){
-  Serial.println("fading in A");
-  fade_a_counter = 0;
-  fade_a_cancel = false;
-  Alarm.timerOnce(1, fade_a_in_helper);
-}
-void fade_a_in_helper(){
-  fade_a_counter++;
-  if(fade_a_cancel){
-    return;
-  }
-  if(fade_a_counter >= FADE_TIME){
-    TriacDimmer::setBrightness(9, 1);
-    return;
-  }
-  TriacDimmer::setBrightness(9, (float) fade_a_counter / FADE_TIME);
-  Alarm.timerOnce(1, fade_a_in_helper);
-}
-void fade_b_in(){
-  Serial.println("fading in B");
-  fade_b_counter = 0;
-  fade_b_cancel = false;
-  Alarm.timerOnce(1, fade_b_in_helper);
-}
-void fade_b_in_helper(){
-  fade_b_counter++;
-  if(fade_b_cancel){
-    return;
-  }
-  if(fade_b_counter >= FADE_TIME){
-    TriacDimmer::setBrightness(10, 1);
-    return;
-  }
-  TriacDimmer::setBrightness(10, (float) fade_b_counter / FADE_TIME);
-  Alarm.timerOnce(1, fade_b_in_helper);
-}
-void turn_a_off(){
-  fade_a_cancel = true;
-  TriacDimmer::setBrightness(9, 0);
-}
-void turn_b_off(){
-  fade_b_cancel = true;
-  TriacDimmer::setBrightness(10, 0);
-}
-void turn_off(){
-  turn_a_off();
-  turn_b_off();
-}
 
-void setupAlarms(){
-  Alarm.alarmRepeat(0,0,0, fade_a_in);
-  Alarm.alarmRepeat(0,0,0, fade_b_in);
-  Alarm.alarmRepeat(0,0,0, turn_a_off);
-  Alarm.alarmRepeat(0,0,0, turn_b_off);
-  Alarm.disable(0);
-  Alarm.disable(1);
-  Alarm.disable(2);
-  Alarm.disable(3);
-}
 
-// ===================== EEPROM SETUP ======================
+// ==================== EEPROM SETTINGS SETUP ======================
 #include <extEEPROM.h>
 extEEPROM eep(kbits_32, 1, 32);
 
@@ -140,48 +111,105 @@ extEEPROM eep(kbits_32, 1, 32);
 struct setting_t {
   struct id_t {
     const char signature[8] = "CLOCKCFG";
-    const uint32_t version = ~ 0x00000000;
+    const uint16_t v_major = 0xFFFD;
+    const uint16_t v_minor = 0xFFFE;
     const uint32_t length = sizeof(setting_t);
   };
   const id_t id;
-  time_t alarm[4];
+  
   int8_t timezone;
   size_t dst;
+
+  uint16_t screen_timeout;
 };
 
 setting_t setting;
 
+volatile bool saveFlag = false;
+volatile bool reloadFlag = false;
+void serviceState(){
+  if(saveFlag){
+    saveFlag = false;
+    save();
+  }
+  if(reloadFlag){
+    reloadFlag = false;
+    reload();
+  }
+}
 void save(){
+  #ifdef DEBUG
+  Serial.print("Saving...");
+  #endif
+  
   eep.begin(twiClock100kHz);
   eep.write(0, (byte*)&setting, sizeof(setting));
-
+  
+  #ifdef DEBUG
+  Serial.println("ok!");
+  #endif
+  
   update();
 }
 
 void reload(){
+  #ifdef DEBUG
+  Serial.print("Loading...");
+  #endif
+  
   setting_t::id_t id;
   eep.begin(twiClock100kHz);
   eep.read(0, (byte*)(&id), sizeof(setting_t::id_t));
-  if(memcmp(&id, &setting.id, sizeof(setting_t::id_t)) != 0){
-    Serial.printf("Bad settings file:\nneed:%-8s v. %d, <%d>\nhave:%-8s v. %d, <%d>",
-        setting.id.signature, setting.id.version, setting.id.length, id.signature, id.version, id.length);
+  if(memcmp(&id.signature, &setting.id.signature, 8) != 0){
+    #ifdef DEBUG
+    Serial.printf(F("error: expected file header '%8s': got '%8s'!\n"),
+        setting.id.signature, id.signature);
+    #endif
     return;
   }
-  
-  eep.read(0, (byte*)&setting, sizeof(setting));
+  if(id.v_major != setting.id.v_major || setting.id.v_minor > id.v_minor ){
+    #ifdef DEBUG
+    Serial.printf(F("error: current version (%4x:%4x) is incompatible with version (%4x:%4x)!\n"),
+        setting.id.v_major, setting.id.v_minor, id.v_major, id.v_minor);
+    #endif
+    return;
+  }
+  if(setting.id.v_minor != id.v_minor ){
+    #ifdef DEBUG
+    Serial.printf(F("loading from compatible older version (%4x:%4x) ..."),
+        id.v_major, id.v_minor);
+    #endif
+    #ifdef QUIT_ON_WARN
+    return;
+    #endif
+    
+  }
+  if(setting.id.length != id.length ){
+    #ifdef DEBUG
+    Serial.printf(F("warning: different lengths (old %d, new %d) ..."),
+        setting.id.length, id.length);
+    #endif
+    #ifdef QUIT_ON_WARN
+    return;
+    #endif
+  }
+  eep.read(0, (byte*)&setting, id.length);
 
+  #ifdef DEBUG
+  Serial.println("ok!");
+  #endif
+  
   update();
 }
 
 void update(){
-  set_zone(setting.dst * ONE_HOUR);
-  switch(setting.dst){
-    case 0: set_dst(nullptr); break;
-    case 1: set_dst(usa_dst); break;
-    case 2: set_dst(eu_dst); break;
-  }
+  //set_zone(setting.timezone * ONE_HOUR);
+//  switch(setting.dst){
+//    case 0: set_dst(nullptr); break;
+//    case 1: set_dst(usa_dst); break;
+//    case 2: set_dst(eu_dst); break;
+//  }
   for(uint8_t i = 0; i < 4; i++){
-    Alarm.write(i, convertToTimeLib(setting.alarm[i]) % ONE_DAY);
   }
 }
 
@@ -200,6 +228,7 @@ void update(){
 const char* const adj2_names[] = {
   "Daylight Time",
   "Time Zone",
+  "Screen Timeout",
   "Back",
 };
 
@@ -211,111 +240,144 @@ const char* const dst_names[] = {
 
 const char* const dst_fmt = "DST: %-6s";
 const char* const off_fmt = "Offset: GMT%+d";
-
+const char* const to_fmt = "Timeout: %4d s";
 ChoiceAdjustment adj_dst(&setting.dst, dst_names, 3, dst_fmt, "", highlight);
 Adjuster<int8_t> adjr_tz(&setting.timezone, -11, 13, 1, true);
 Adjustment<int8_t> adj_tz(&adjr_tz, off_fmt, "", highlight);
+Adjuster<uint16_t> adjr_to(&setting.screen_timeout, 1, 1000, 1);
+Adjustment<uint16_t> adj_to(&adjr_to, to_fmt, "", highlight);
 ExitAdjustment<EXIT_SAVE> adj_exit;
 AdjustmentBase* adj2[] = {
   &adj_dst,
   &adj_tz,
+  &adj_to,
   &adj_exit
 };
 
-PickAdjustment menu2(adj2, adj2_names, 3, LCD_CHARS);
+PickAdjustment menu2(adj2, adj2_names, 4, LCD_CHARS);
 
 const char* const adj_names[] = {
-  "Alarm 1",
-  "Alarm 2",
-  "Alarm 3",
-  "Alarm 4",
   "Settings",
   "Back",
 };
 const char* const time_fmt = "  %I:%M %p";
-const char* const time_edit = "  00 11";
-TimeAdjustment<false,false,false,true,true,false>
-  adj_a0(&setting.alarm[0], time_fmt, time_edit, highlight),
-  adj_a1(&setting.alarm[1], time_fmt, time_edit, highlight),
-  adj_a2(&setting.alarm[2], time_fmt, time_edit, highlight),
-  adj_a3(&setting.alarm[3], time_fmt, time_edit, highlight);
+const char* const time_fx = "  00 11";
+//TimeAdjustment<false,false,false,true,true,false>
+//  adj_a0(&setting.alarm[0], time_fmt, time_edit, highlight),
+//  adj_a1(&setting.alarm[1], time_fmt, time_edit, highlight),
+//  adj_a2(&setting.alarm[2], time_fmt, time_edit, highlight),
+//  adj_a3(&setting.alarm[3], time_fmt, time_edit, highlight);
 AdjustmentBase* adj[] = {
-  &adj_a0,
-  &adj_a1,
-  &adj_a2,
-  &adj_a3,
+//  &adj_a0,
+//  &adj_a1,
+//  &adj_a2,
+//  &adj_a3,
   &menu2,
   &adj_exit
 };
 
-PickAdjustment root(adj, adj_names, 6, LCD_CHARS);
+PickAdjustment root(adj, adj_names, 2, LCD_CHARS);
 
 
 
 // ============================ INPUT DEVICE CONFIG ==============================
-#include <ClickEncoder.h>
-ClickEncoder encoder(7, 6, 5, 4);
+#include <Rotary.h>
+//#include <ClickButton.h>
+#include <ClickButton.h>
 
-ISR(TIMER2_COMPA_vect) {
-  serviceEncoder();
-}
+
+Rotary encoder(7, 6);
+volatile ClickButton button(5);
+
 
 bool in_menu = false;
-void serviceEncoder(){  
-  encoder.service();
-  int8_t v = encoder.getValue();
-  ClickEncoder::Button b = encoder.getButton();
+unsigned long last_act = 0;
+ISR(TIMER2_COMPA_vect) { //service encoder
+  button.service();
+  ClickButton::Button b = button.getValue();
   
-  if(!in_menu && (b == ClickEncoder::Open || b == ClickEncoder::Released)  && v == 0){
-    return;
-  }
-  if(!in_menu){
-    in_menu = true;
-    return;
-  }
-  
-  exit_t ev = EXIT;
-  if (b != ClickEncoder::Open) {
-    switch (b) {
-      case ClickEncoder::Pressed:
-        break;
-      case ClickEncoder::Held:
-        ev = root.action(ACT_CTXT);
-        break;
-      case ClickEncoder::Released:
-        break;
-      case ClickEncoder::Clicked:
-        ev = root.action(ACT_ENTER);
-        break;
-      case ClickEncoder::DoubleClicked:
-        ev = root.action(ACT_BACK);
-        break;
-    }
-  }
-  if(v != 0){
-    ev = root.action(ACT_CHANGE, v);
+  unsigned char dir = encoder.process();
+  int8_t v;// = encoder.process();
+  switch(dir){
+    case DIR_NONE: v = 0; break;
+    case DIR_CW: v = 1; break;
+    case DIR_CCW: v = -1; break;
   }
 
+  if(!(b == ClickButton::Open && v == 0) && millis() - last_act > setting.screen_timeout*1000){
+    last_act = millis();
+    return;
+  }
+
+  exit_t ev = E_NONE;
+  
+  switch (b) {
+    case ClickButton::Open:
+      if(v != 0) {
+        ev = root.action(ACT_CHANGE, v);
+      } else if(in_menu){
+        ev = root.action(ACT_NONE);
+      }
+      break;
+    case ClickButton::Pressed:
+      break;
+    case ClickButton::Held:
+      if(in_menu){
+        ev = root.action(ACT_CTXT);
+      } else {
+        ev = root.action(ACT_BEGIN);
+      }
+      break;
+    case ClickButton::Released:
+      break;
+    case ClickButton::Clicked:
+      if(in_menu){
+        ev = root.action(ACT_ENTER);
+      } else {
+        ev = root.action(ACT_BEGIN);
+      }
+      break;
+    case ClickButton::DoubleClicked:
+      if(in_menu){
+        ev = root.action(ACT_BACK);
+      } else {
+        ev = root.action(ACT_BEGIN);
+      }
+      break;
+  }
+  
   switch(ev){
   case EXIT_SAVE:
     in_menu = false;
+    saveFlag = true;
+    break;
   case NOEXIT_SAVE:
-    save();
+    in_menu = true;
+    saveFlag = true;
+    last_act = millis();
     break;
   case EXIT_CANCEL:
     in_menu = false;
+    reloadFlag = true;
+    break;
   case NOEXIT_CANCEL:
-    reload();
+    in_menu = true;
+    reloadFlag = true;
+    last_act = millis();
     break;
   case EXIT:
-    //in_menu = false;
+    in_menu = false;
+    break;
   case NOEXIT:
+    in_menu = true;
+    last_act = millis();
+    break;
+  case E_NONE:
     break;
   }
 }
 
 void setupInput(){
-  encoder.setAccelerationEnabled(false);
   
   TIMSK2 = 0; // disable interrupts
   TIFR2 = 0xff; // clear flags
@@ -323,48 +385,46 @@ void setupInput(){
   TCCR2B = _BV(CS22); // /64 prescaler
   OCR2A = 250; // 1ms intervals
   TIMSK2 |= _BV(OCIE2A); // enable OCRA interrupt
+//         
 }
 
 
 
 
 void setup() {
-  Serial.begin(115200);
+  #ifdef DEBUG
+  //Serial.begin(115200);
+  Serial.begin(9600);
+  #endif
   setupLCD();
-  setupDimmer();
   setupRTC();
-  setupAlarms();
+//  setupAlarms();
   setupInput();
+  setupDimmer();
   reload();
-
-  if(timeStatus()!= timeSet) 
-     Serial.println(F("Unable to sync with the RTC"));
-  else
-     Serial.println(F("Time Synced!"));
 }
 
 void loop() {
-  
-  if (Serial.available()) {
-    processSyncMessage();
-  }
-  
   char buf[LCD_LINES*LCD_CHARS+1];
   memset(buf, 0x20, LCD_LINES*LCD_CHARS+1);
+  serviceState();
+  serviceRTC();
 
-  if(in_menu){
+  if(millis() - last_act > setting.screen_timeout * 1000){
+    lcd.setBacklight(0);
+  } else {
     lcd.setBacklight(255);
+  }
+  if(in_menu){
     root.full_string(buf, LCD_LINES*LCD_CHARS);
   } else {
-    time_t t = convertToTimeH(now());
-    strftime(buf, LCD_LINES*LCD_CHARS+1, "   %I:%M:%S %p  %a %b %d, %Y", localtime(&t));
+    time_t t = time(nullptr);
+    strftime(buf, LCD_LINES*LCD_CHARS+1, "   %I:%M:%S %p  %a %b %d, %Y", &RTC.time);
+    
+    #ifdef DEBUG
+    //Serial.println(RTC.time.tm_year);
+    #endif
   }
-
-//  Serial.printf(F("now: %d\n"), now());
-//  Serial.printf(F("now: %d\n"), convertToTimeH(now()));
-//  time_t t = convertToTimeH(now());
-//  strftime(buf, 9, "%H:%M:%S", localtime(&t));
-//  Serial.println(buf);
   
   
   for(size_t i = 0; i < LCD_LINES*LCD_CHARS; i++){
@@ -380,30 +440,9 @@ void loop() {
     lcd.write(buf2, LCD_CHARS);
   }
   
-  Serial.printf(F("free: %d\n"), freeMemory());
-  Alarm.delay(10);
-}
-
-
-void digitalClockDisplay(Print& p){
-  // digital clock display of the time
-  p.print(hour());
-  printDigits(p, minute());
-  printDigits(p, second());
-  p.print(" ");
-  p.print(day());
-  p.print(" ");
-  p.print(month());
-  p.print(" ");
-  p.print(year()); 
-  p.println(); 
-}
-
-void printDigits(Print& p, int digits){
-  // utility function for digital clock display: prints preceding colon and leading 0
-  p.print(":");
-  if(digits < 10)
-    p.print('0');
-  p.print(digits);
+  #ifdef DEBUG
+  //Serial.printf(F("free: %d\n"), freeMemory());
+  #endif
+  delay(10);
 }
 
