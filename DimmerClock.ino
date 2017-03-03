@@ -85,7 +85,7 @@ extEEPROM eep(kbits_32, 1, 32);
 
 struct setting_t {
   struct id_t {
-    const char signature[8] = "CLOCKCFG";
+    const char signature[8] = {'C','L','O','C','K','C','F','G'};
     const uint16_t v_major = 0xFFFD;
     const uint16_t v_minor = 0xFFFE;
     const uint32_t length = sizeof(setting_t);
@@ -95,7 +95,7 @@ struct setting_t {
   int8_t timezone;
   size_t dst;
 
-  uint16_t screen_timeout;
+  uint16_t screen_timeout = 10;
 };
 
 setting_t setting;
@@ -200,28 +200,29 @@ void update(){
 #include <PickAdjustment.h>
 
 
-const char* const adj2_names[] = {
+const char* adj2_names[] = {
   "Daylight Time",
   "Time Zone",
   "Screen Timeout",
   "Back",
 };
 
-const char* const dst_names[] = {
+const char* dst_names[] = {
   "None",
   "USA",
   "Europe"
 };
 
-const char* const dst_fmt = "DST: %-6s";
-const char* const off_fmt = "Offset: GMT%+d";
-const char* const to_fmt = "Timeout: %4d s";
+const char* dst_fmt = "DST: %-6s";
+const char* off_fmt = "Offset: GMT%+d";
+const char* to_fmt = "Timeout: %4d s";
 ChoiceAdjustment adj_dst(&setting.dst, dst_names, 3, dst_fmt, "", highlight);
 Adjuster<int8_t> adjr_tz(&setting.timezone, -11, 13, 1, true);
 Adjustment<int8_t> adj_tz(&adjr_tz, off_fmt, "", highlight);
 Adjuster<uint16_t> adjr_to(&setting.screen_timeout, 1, 1000, 1);
 Adjustment<uint16_t> adj_to(&adjr_to, to_fmt, "", highlight);
 ExitAdjustment<EXIT_SAVE> adj_exit;
+
 AdjustmentBase* adj2[] = {
   &adj_dst,
   &adj_tz,
@@ -231,12 +232,12 @@ AdjustmentBase* adj2[] = {
 
 PickAdjustment menu2(adj2, adj2_names, 4, LCD_CHARS);
 
-const char* const adj_names[] = {
+const char* adj_names[] = {
   "Settings",
   "Back",
 };
-const char* const time_fmt = "  %I:%M %p";
-const char* const time_fx = "  00 11";
+const char* time_fmt = "  %I:%M %p";
+const char* time_fx = "  00 11";
 //TimeAdjustment<false,false,false,true,true,false>
 //  adj_a0(&setting.alarm[0], time_fmt, time_edit, highlight),
 //  adj_a1(&setting.alarm[1], time_fmt, time_edit, highlight),
@@ -262,7 +263,7 @@ PickAdjustment root(adj, adj_names, 2, LCD_CHARS);
 
 
 Rotary encoder(7, 6);
-volatile ClickButton button(5);
+ClickButton button(5);
 
 
 bool in_menu = false;
@@ -272,11 +273,12 @@ ISR(TIMER2_COMPA_vect) { //service encoder
   ClickButton::Button b = button.getValue();
   
   unsigned char dir = encoder.process();
-  int8_t v;// = encoder.process();
+  int8_t v = 0;// = encoder.process();
   switch(dir){
     case DIR_NONE: v = 0; break;
     case DIR_CW: v = 1; break;
     case DIR_CCW: v = -1; break;
+    default: assert(false); break;
   }
 
   if(!(b == ClickButton::Open && v == 0) && millis() - last_act > setting.screen_timeout*1000){
@@ -303,8 +305,6 @@ ISR(TIMER2_COMPA_vect) { //service encoder
         ev = root.action(ACT_BEGIN);
       }
       break;
-    case ClickButton::Released:
-      break;
     case ClickButton::Clicked:
       if(in_menu){
         ev = root.action(ACT_ENTER);
@@ -318,6 +318,10 @@ ISR(TIMER2_COMPA_vect) { //service encoder
       } else {
         ev = root.action(ACT_BEGIN);
       }
+      break;
+    case ClickButton::Released:
+      break;
+    case ClickButton::Closed:
       break;
   }
   
