@@ -394,11 +394,7 @@ void loop() {
     root.full_string(buf, LCD_LINES*LCD_CHARS);
   } else {
     time_t t = time(nullptr);
-    strftime(buf, LCD_LINES*LCD_CHARS+1, "   %I:%M:%S %p  %a %b %d, %Y", &RTC.time);
-    
-    #ifdef DEBUG
-    //Serial.println(RTC.time.tm_year);
-    #endif
+    strftime(buf, LCD_LINES*LCD_CHARS+1, "   %I:%M:%S %p  %a %b %d, %Y", localtime(&t));
   }
   
   
