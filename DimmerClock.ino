@@ -44,55 +44,30 @@ void setupDimmer(){
 #include <MD_DS1307.h>
 void setupRTC(){
   RTC.readTime();
-  //set_system_time(mk_gmtime(&RTC.time));
+  set_system_time(mk_gmtime(&RTC.time));
 }
 void serviceRTC(){
+  static unsigned long last_sync = 0;
   if (Serial.available()) {
     processSyncMessage();
-  }
-  
-  static unsigned long last_sync = 0;
-  if(millis() - last_sync > 1000){ // tick every second
+    last_sync = millis();
+  } else if(millis() - last_sync > 1000){ // tick every second
     RTC.readTime();
-    //set_system_time(mk_gmtime(&RTC.time));
+    set_system_time(mk_gmtime(&RTC.time));
     last_sync += 1000;
   }
 }
 
-#define TIME_HEADER  "T"   // Header tag for serial time sync message
+#define TIME_HEADER  'T'   // Header tag for serial time sync message
 void processSyncMessage() {
-  long pctime;
 
   if(Serial.find(TIME_HEADER)) {
-    const unsigned long offset = 130700005;
-    pctime = Serial.parseInt();
-    Serial.println(pctime);
-    pctime = pctime - offset;
-    Serial.println(pctime);
-    Serial.print("\nRTC before:");
-    for(size_t i = 0; i < sizeof(tm); i++){
-      Serial.printf("%2x:", *((uint8_t*)(&RTC.time) + i));
-    }
-    tm t = *gmtime(pctime);
-    Serial.print("\nnew value :");
-    for(size_t i = 0; i < sizeof(tm); i++){
-      Serial.printf("%2x:", *((uint8_t*)(&t) + i));
-    }
-    RTC.time = *gmtime(pctime);
-    Serial.print("\nRTC assign:");
-    for(size_t i = 0; i < sizeof(tm); i++){
-      Serial.printf("%2x:", *((uint8_t*)(&RTC.time) + i));
-    }
+    time_t pctime = Serial.parseInt();
+    time_t mctime = pctime - UNIX_OFFSET;
+    gmtime_r(&mctime, &RTC.time);
     RTC.writeTime();
-    Serial.print("\nRTC write :");
-    for(size_t i = 0; i < sizeof(tm); i++){
-      Serial.printf("%2x:", *((uint8_t*)(&RTC.time) + i));
-    }
-    RTC.readTime();
-    Serial.print("\nRTC read  :");
-    for(size_t i = 0; i < sizeof(tm); i++){
-      Serial.printf("%2x:", *((uint8_t*)(&RTC.time) + i));
-    }
+    set_system_time(mctime);
+    
   }
 }
 
