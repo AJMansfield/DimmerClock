@@ -46,7 +46,7 @@ void setupRTC(){
   RTC.readTime();
   set_system_time(mk_gmtime(&RTC.time));
 }
-void serviceRTC(){
+void serviceRTC(){ // could theoretically be switched to an interrupt, but that would require 
   static unsigned long last_sync = 0;
   if (Serial.available()) {
     processSyncMessage();
@@ -114,7 +114,7 @@ void serviceState(){
 }
 void save(){
   #ifdef DEBUG
-  Serial.print("Saving...");
+  Serial.print(F("Saving..."));
   #endif
   
   eep.begin(twiClock100kHz);
@@ -129,7 +129,7 @@ void save(){
 
 void reload(){
   #ifdef DEBUG
-  Serial.print("Loading...");
+  Serial.print(F("Loading..."));
   #endif
   
   setting_t::id_t id;
@@ -178,13 +178,11 @@ void reload(){
 }
 
 void update(){
-  //set_zone(setting.timezone * ONE_HOUR);
-//  switch(setting.dst){
-//    case 0: set_dst(nullptr); break;
-//    case 1: set_dst(usa_dst); break;
-//    case 2: set_dst(eu_dst); break;
-//  }
-  for(uint8_t i = 0; i < 4; i++){
+  set_zone(setting.timezone * ONE_HOUR);
+  switch(setting.dst){
+    case 0: set_dst(nullptr); break;
+    case 1: set_dst(usa_dst); break;
+    case 2: set_dst(eu_dst); break;
   }
 }
 
@@ -216,7 +214,7 @@ const char* dst_names[] = {
 const char* dst_fmt = "DST: %-6s";
 const char* off_fmt = "Offset: GMT%+d";
 const char* to_fmt = "Timeout: %4d s";
-ChoiceAdjustment adj_dst(&setting.dst, dst_names, 3, dst_fmt, "", highlight);
+ChoiceAdjustment adj_dst(&setting.dst, dst_names, sizeof(dst_names)/sizeof(const char*), dst_fmt, "", highlight);
 Adjuster<int8_t> adjr_tz(&setting.timezone, -11, 13, 1, true);
 Adjustment<int8_t> adj_tz(&adjr_tz, off_fmt, "", highlight);
 Adjuster<uint16_t> adjr_to(&setting.screen_timeout, 1, 1000, 1);
@@ -230,21 +228,23 @@ AdjustmentBase* adj2[] = {
   &adj_exit
 };
 
-PickAdjustment menu2(adj2, adj2_names, 4, LCD_CHARS);
+PickAdjustment menu2(adj2, adj2_names, sizeof(adj2)/sizeof(AdjustmentBase*), LCD_CHARS);
 
 const char* adj_names[] = {
+  "Alarm 1",
   "Settings",
   "Back",
 };
 const char* time_fmt = "  %I:%M %p";
 const char* time_fx = "  00 11";
-//TimeAdjustment<false,false,false,true,true,false>
-//  adj_a0(&setting.alarm[0], time_fmt, time_edit, highlight),
+time_t t0;
+TimeAdjustment<false,false,false,true,true,false>
+  adj_a0(&t0, time_fmt, time_fx, highlight);
 //  adj_a1(&setting.alarm[1], time_fmt, time_edit, highlight),
 //  adj_a2(&setting.alarm[2], time_fmt, time_edit, highlight),
 //  adj_a3(&setting.alarm[3], time_fmt, time_edit, highlight);
 AdjustmentBase* adj[] = {
-//  &adj_a0,
+  &adj_a0,
 //  &adj_a1,
 //  &adj_a2,
 //  &adj_a3,
@@ -252,7 +252,31 @@ AdjustmentBase* adj[] = {
   &adj_exit
 };
 
-PickAdjustment root(adj, adj_names, 2, LCD_CHARS);
+PickAdjustment root(adj, adj_names, sizeof(adj)/sizeof(AdjustmentBase*), LCD_CHARS);
+
+#include <TimeLUT.h>
+
+TimeLUT schedule;
+
+void setupSchedule(){
+  schedule.insert(2000, 5);
+  schedule.insert(3000, 10);
+  schedule.insert(7000, 30);
+  schedule.insert(8000, 35);
+  schedule.insert(9000, 40);
+  schedule.insert(4000, 15);
+  schedule.insert(1000, 5);
+  schedule.insert(5000, 20);
+  schedule.insert(6000, 25);
+  schedule.insert(10000, 45);
+
+  for(size_t i = 0; i < schedule.size; i++){
+    Serial.printf("(%p, %p)\n", &schedule.table[i].x, &schedule.table[i].y);
+  }
+
+  //time_t randm = rand();
+  //Serial.printf("(%d, %2d)\n", randm, schedule.lookup(randm));
+}
 
 
 
@@ -377,7 +401,7 @@ void setup() {
   #endif
   setupLCD();
   setupRTC();
-//  setupAlarms();
+  setupSchedule();
   setupInput();
   setupDimmer();
   reload();
