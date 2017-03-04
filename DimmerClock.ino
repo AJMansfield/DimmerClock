@@ -254,31 +254,6 @@ AdjustmentBase* adj[] = {
 
 PickAdjustment root(adj, adj_names, sizeof(adj)/sizeof(AdjustmentBase*), LCD_CHARS);
 
-#include <TimeLUT.h>
-
-TimeLUT schedule;
-
-void setupSchedule(){
-  schedule.insert(2000, 5);
-  schedule.insert(3000, 10);
-  schedule.insert(7000, 30);
-  schedule.insert(8000, 35);
-  schedule.insert(9000, 40);
-  schedule.insert(4000, 15);
-  schedule.insert(1000, 5);
-  schedule.insert(5000, 20);
-  schedule.insert(6000, 25);
-  schedule.insert(10000, 45);
-
-  for(size_t i = 0; i < schedule.size; i++){
-    Serial.printf("(%p, %p)\n", &schedule.table[i].x, &schedule.table[i].y);
-  }
-
-  //time_t randm = rand();
-  //Serial.printf("(%d, %2d)\n", randm, schedule.lookup(randm));
-}
-
-
 
 // ============================ INPUT DEVICE CONFIG ==============================
 #include <Rotary.h>
