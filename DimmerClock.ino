@@ -1,10 +1,11 @@
 #define INCLUDE_PRINTF
 #define DEBUG
-#define QUIT_ON_WARN
+//#define QUIT_ON_WARN
 #include <Arduino.h>
 #include <MemoryFree.h>
 
 #include <Wire.h>
+#include <ArduinoSTL.h>
 // note, I2C addresses:
 // LCD is at 0x3f
 // RTC is at 0x68
@@ -73,7 +74,12 @@ void processSyncMessage() {
 
 // ========================== ALARM SETUP =========================
 
-
+#include <TimeLUT.h>
+#include <map>
+std::map<time_t, float> lut;
+void setupSchedule(){
+  
+}
 
 // ==================== EEPROM SETTINGS SETUP ======================
 #include <extEEPROM.h>
@@ -129,7 +135,7 @@ void save(){
 
 void reload(){
   #ifdef DEBUG
-  Serial.print(F("Loading..."));
+  std::cout << F("Loading...\n");
   #endif
   
   setting_t::id_t id;
@@ -137,8 +143,7 @@ void reload(){
   eep.read(0, (byte*)(&id), sizeof(setting_t::id_t));
   if(memcmp(&id.signature, &setting.id.signature, 8) != 0){
     #ifdef DEBUG
-    Serial.printf(F("error: expected file header '%8s': got '%8s'!\n"),
-        setting.id.signature, id.signature);
+    std::cout << F("error: expected file header '") << setting.id.signature << F("', got '") << id.signature << F("'!\n");
     #endif
     return;
   }
@@ -415,7 +420,7 @@ void loop() {
   }
   
   #ifdef DEBUG
-  //Serial.printf(F("free: %d\n"), freeMemory());
+  Serial.printf(F("free: %d\n"), freeMemory());
   #endif
   delay(10);
 }
